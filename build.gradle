@@ -3,13 +3,13 @@ buildscript {
 		mavenCentral()
 	}
 	dependencies {
-		classpath("io.spring.javaformat:spring-javaformat-gradle-plugin:0.0.26")
+		classpath("io.spring.javaformat:spring-javaformat-gradle-plugin:0.0.45")
 	}
 }
 
 plugins {
-	id 'org.springframework.boot' version '2.4.1'
-	id 'io.spring.dependency-management' version '1.0.10.RELEASE'
+	id 'org.springframework.boot' version '3.5.0'
+	id 'io.spring.dependency-management' version '1.1.7'
 	id 'java'
 }
 
@@ -17,7 +17,7 @@ apply plugin: 'io.spring.javaformat'
 
 group = 'com.davidagood'
 version = '0.0.1-SNAPSHOT'
-sourceCompatibility = '11'
+sourceCompatibility = '21'
 
 configurations {
 	compileOnly {
@@ -30,7 +30,7 @@ repositories {
 }
 
 ext {
-	okHttpVersion = '4.9.0'
+	okHttpVersion = '4.12.0'
 }
 
 dependencies {
@@ -43,6 +43,10 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	implementation "com.squareup.okhttp3:okhttp:${okHttpVersion}"
 	testImplementation "com.squareup.okhttp3:mockwebserver:${okHttpVersion}"
+}
+
+tasks.withType(JavaCompile) {
+    options.compilerArgs.add("-parameters")
 }
 
 test {

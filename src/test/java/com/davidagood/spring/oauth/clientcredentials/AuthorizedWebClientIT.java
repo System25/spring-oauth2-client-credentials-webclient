@@ -15,18 +15,16 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.RequestEntity;
 import org.springframework.http.converter.FormHttpMessageConverter;
 import org.springframework.security.oauth2.client.OAuth2AuthorizationFailureHandler;
 import org.springframework.security.oauth2.client.OAuth2AuthorizationSuccessHandler;
-import org.springframework.security.oauth2.client.endpoint.DefaultClientCredentialsTokenResponseClient;
+import org.springframework.security.oauth2.client.endpoint.DefaultOAuth2TokenRequestParametersConverter;
 import org.springframework.security.oauth2.client.endpoint.OAuth2AccessTokenResponseClient;
 import org.springframework.security.oauth2.client.endpoint.OAuth2ClientCredentialsGrantRequest;
-import org.springframework.security.oauth2.client.endpoint.OAuth2ClientCredentialsGrantRequestEntityConverter;
+import org.springframework.security.oauth2.client.endpoint.RestClientClientCredentialsTokenResponseClient;
 import org.springframework.security.oauth2.client.http.OAuth2ErrorResponseErrorHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
@@ -35,15 +33,17 @@ import org.springframework.security.oauth2.core.http.converter.OAuth2AccessToken
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.json.JsonCompareMode;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -73,8 +73,10 @@ class AuthorizedWebClientIT {
 
 	private static final int MOCK_SERVER_PORT = getFreePort();
 
-	private static final Instant FIXED_TIMESTAMP = LocalDate.of(2020, 1, 8).atStartOfDay()
-			.atZone(ZoneId.of("America/New_York")).toInstant();
+	private static final Instant FIXED_TIMESTAMP = LocalDate.of(2020, 1, 8)
+		.atStartOfDay()
+		.atZone(ZoneId.of("America/New_York"))
+		.toInstant();
 
 	private static MockWebServer mockWebServer;
 
@@ -82,8 +84,8 @@ class AuthorizedWebClientIT {
 	MockMvc mockMvc;
 
 	@Autowired
-	@Qualifier("oauth2RestTemplate")
-	RestTemplate oauth2RestTemplate;
+	@Qualifier("oauth2RestClient")
+	RestClient oauth2RestClient;
 
 	@Autowired
 	ObjectMapper objectMapper;
@@ -91,15 +93,15 @@ class AuthorizedWebClientIT {
 	@Autowired
 	ClientRegistrationRepository clientRegistrationRepository;
 
-	@SpyBean
+	@MockitoSpyBean
 	@Qualifier("authorizationServerAuthorizationSuccessHandler")
 	OAuth2AuthorizationSuccessHandler authorizationServerAuthorizationSuccessHandler;
 
-	@SpyBean
+	@MockitoSpyBean
 	@Qualifier("authorizationServerAuthorizationFailureHandler")
 	OAuth2AuthorizationFailureHandler authorizationServerAuthorizationFailureHandler;
 
-	@SpyBean
+	@MockitoSpyBean
 	@Qualifier("resourceServerAuthorizationFailureHandler")
 	OAuth2AuthorizationFailureHandler resourceServerAuthorizationFailureHandler;
 
@@ -140,11 +142,15 @@ class AuthorizedWebClientIT {
 		mockWebServer.enqueue(createResourceServerSuccessResponse(secretWords));
 		mockWebServer.enqueue(createResourceServerSuccessResponse(secretWords));
 
-		mockMvc.perform(get("/api/words")).andExpect(status().isOk())
-				.andExpect(MockMvcResultMatchers.content().json(objectMapper.writeValueAsString(expected), true));
+		mockMvc.perform(get("/api/words"))
+			.andExpect(status().isOk())
+			.andExpect(MockMvcResultMatchers.content()
+				.json(objectMapper.writeValueAsString(expected), JsonCompareMode.STRICT));
 
-		mockMvc.perform(get("/api/words")).andExpect(status().isOk())
-				.andExpect(MockMvcResultMatchers.content().json(objectMapper.writeValueAsString(expected), true));
+		mockMvc.perform(get("/api/words"))
+			.andExpect(status().isOk())
+			.andExpect(MockMvcResultMatchers.content()
+				.json(objectMapper.writeValueAsString(expected), JsonCompareMode.STRICT));
 
 		verify(authorizationServerAuthorizationSuccessHandler, times(1)).onAuthorizationSuccess(any(), any(), any());
 
@@ -152,15 +158,15 @@ class AuthorizedWebClientIT {
 		assertThat(authServerRequest.getRequestUrl()).isEqualTo(HttpUrl.parse(
 				clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID).getProviderDetails().getTokenUri()));
 		assertThat(authServerRequest.getHeader(HttpHeaders.CONTENT_TYPE))
-				.isEqualTo(new MediaType(MediaType.APPLICATION_FORM_URLENCODED, StandardCharsets.UTF_8).toString());
+			.isEqualTo(new MediaType(MediaType.APPLICATION_FORM_URLENCODED).toString());
 
 		RecordedRequest firstResourceServerRequest = mockWebServer.takeRequest();
 		assertThat(firstResourceServerRequest.getHeader(HttpHeaders.AUTHORIZATION))
-				.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
+			.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
 
 		RecordedRequest secondResourceServerRequest = mockWebServer.takeRequest();
 		assertThat(secondResourceServerRequest.getHeader(HttpHeaders.AUTHORIZATION))
-				.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
+			.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
 	}
 
 	@Test
@@ -174,8 +180,10 @@ class AuthorizedWebClientIT {
 		mockWebServer.enqueue(createResourceServerSuccessResponse(secretWords));
 
 		mockMvc.perform(get("/api/words")).andExpect(status().isInternalServerError());
-		mockMvc.perform(get("/api/words")).andExpect(status().isOk())
-				.andExpect(MockMvcResultMatchers.content().json(objectMapper.writeValueAsString(expected), true));
+		mockMvc.perform(get("/api/words"))
+			.andExpect(status().isOk())
+			.andExpect(MockMvcResultMatchers.content()
+				.json(objectMapper.writeValueAsString(expected), JsonCompareMode.STRICT));
 
 		verify(authorizationServerAuthorizationSuccessHandler, times(2)).onAuthorizationSuccess(any(), any(), any());
 		verify(resourceServerAuthorizationFailureHandler, times(1)).onAuthorizationFailure(any(), any(), any());
@@ -184,37 +192,35 @@ class AuthorizedWebClientIT {
 		assertThat(firstAuthServerRequest.getRequestUrl()).isEqualTo(HttpUrl.parse(
 				clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID).getProviderDetails().getTokenUri()));
 		assertThat(firstAuthServerRequest.getHeader(HttpHeaders.CONTENT_TYPE))
-				.isEqualTo(new MediaType(MediaType.APPLICATION_FORM_URLENCODED, StandardCharsets.UTF_8).toString());
+			.isEqualTo(new MediaType(MediaType.APPLICATION_FORM_URLENCODED).toString());
 
 		RecordedRequest firstResourceServerRequest = mockWebServer.takeRequest();
 		assertThat(firstResourceServerRequest.getHeader(HttpHeaders.AUTHORIZATION))
-				.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
-		/*
-		 * RecordedRequest.getUtf8Body() is deprecated but the suggested alternative,
-		 * RecordedRequest.getBody().readUtf8(), is returning an okhttp.Buffer which is
-		 * not found. Need to research this.
-		 */
-		assertThat(firstAuthServerRequest.getUtf8Body()).isEqualTo(createTokenResponseAsFormData());
+			.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
+
+		assertThat(firstAuthServerRequest.getBody().readUtf8()).isEqualTo(createTokenResponseAsFormData());
 
 		RecordedRequest secondAuthServerRequest = mockWebServer.takeRequest();
 		assertThat(secondAuthServerRequest.getRequestUrl()).isEqualTo(HttpUrl.parse(
 				clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID).getProviderDetails().getTokenUri()));
 		assertThat(secondAuthServerRequest.getHeader(HttpHeaders.CONTENT_TYPE))
-				.isEqualTo(new MediaType(MediaType.APPLICATION_FORM_URLENCODED, StandardCharsets.UTF_8).toString());
+			.isEqualTo(new MediaType(MediaType.APPLICATION_FORM_URLENCODED).toString());
 
 		RecordedRequest secondResourceServerRequest = mockWebServer.takeRequest();
 		assertThat(secondResourceServerRequest.getHeader(HttpHeaders.AUTHORIZATION))
-				.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
+			.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
 	}
 
 	MockResponse createResourceServerSuccessResponse(List<String> secretWords) throws JsonProcessingException {
-		return new MockResponse().setResponseCode(200).setHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)
-				.setBody(objectMapper.writeValueAsString(secretWords));
+		return new MockResponse().setResponseCode(200)
+			.setHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)
+			.setBody(objectMapper.writeValueAsString(secretWords));
 	}
 
 	MockResponse createAuthServerGrantRequestSuccessResponse() {
-		return new MockResponse().setResponseCode(200).setHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)
-				.setBody(createTokenResponseBody());
+		return new MockResponse().setResponseCode(200)
+			.setHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)
+			.setBody(createTokenResponseBody());
 	}
 
 	MockResponse createResourceServerUnauthorizedResponse() {
@@ -258,12 +264,11 @@ class AuthorizedWebClientIT {
 	 * Reusing some of the code in Spring OAuth's
 	 * DefaultClientCredentialsTokenResponseClient.getTokenResponse
 	 */
-	@SuppressWarnings("unchecked")
 	MultiValueMap<String, String> createGrantRequestFormData() {
 		ClientRegistration myClientRegistration = clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID);
 		var grantRequest = new OAuth2ClientCredentialsGrantRequest(myClientRegistration);
-		RequestEntity<?> requestEntity = new OAuth2ClientCredentialsGrantRequestEntityConverter().convert(grantRequest);
-		return (MultiValueMap<String, String>) requestEntity.getBody();
+		return new DefaultOAuth2TokenRequestParametersConverter<OAuth2ClientCredentialsGrantRequest>()
+			.convert(grantRequest);
 	}
 
 	@TestConfiguration
@@ -274,19 +279,19 @@ class AuthorizedWebClientIT {
 			return () -> FIXED_TIMESTAMP;
 		}
 
-		@Bean("oauth2RestTemplate")
-		RestTemplate oauth2RestTemplate() {
+		@Bean("oauth2RestClient")
+		RestClient oauth2RestClient() {
 			RestTemplate restTemplate = new RestTemplate(
 					Arrays.asList(new FormHttpMessageConverter(), new OAuth2AccessTokenResponseHttpMessageConverter()));
 			restTemplate.setErrorHandler(new OAuth2ErrorResponseErrorHandler());
-			return restTemplate;
+			return RestClient.builder(restTemplate).build();
 		}
 
 		@Bean
 		OAuth2AccessTokenResponseClient<OAuth2ClientCredentialsGrantRequest> tokenResponseClient(
-				@Qualifier("oauth2RestTemplate") RestTemplate oauth2RestTemplate) {
-			var defaultTokenResponseClient = new DefaultClientCredentialsTokenResponseClient();
-			defaultTokenResponseClient.setRestOperations(oauth2RestTemplate);
+				@Qualifier("oauth2RestClient") RestClient oauth2RestClient) {
+			var defaultTokenResponseClient = new RestClientClientCredentialsTokenResponseClient();
+			defaultTokenResponseClient.setRestClient(oauth2RestClient);
 			return defaultTokenResponseClient;
 		}
 

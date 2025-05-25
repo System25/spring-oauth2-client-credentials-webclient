@@ -15,9 +15,9 @@ import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProvider
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProviderBuilder;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.RemoveAuthorizedClientOAuth2AuthorizationFailureHandler;
-import org.springframework.security.oauth2.client.endpoint.DefaultClientCredentialsTokenResponseClient;
 import org.springframework.security.oauth2.client.endpoint.OAuth2AccessTokenResponseClient;
 import org.springframework.security.oauth2.client.endpoint.OAuth2ClientCredentialsGrantRequest;
+import org.springframework.security.oauth2.client.endpoint.RestClientClientCredentialsTokenResponseClient;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.reactive.function.client.ServletOAuth2AuthorizedClientExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -69,7 +69,9 @@ public class AuthorizedWebClientConfig {
 			@Qualifier("authorizationServerAuthorizationSuccessHandler") OAuth2AuthorizationSuccessHandler authorizationSuccessHandler,
 			@Qualifier("authorizationServerAuthorizationFailureHandler") OAuth2AuthorizationFailureHandler authorizationFailureHandler) {
 		OAuth2AuthorizedClientProvider authorizedClientProvider = OAuth2AuthorizedClientProviderBuilder.builder()
-				.clientCredentials(r -> r.accessTokenResponseClient(tokenResponseClient)).clientCredentials().build();
+			.clientCredentials(r -> r.accessTokenResponseClient(tokenResponseClient))
+			.clientCredentials()
+			.build();
 		var authorizedClientManager = new AuthorizedClientServiceOAuth2AuthorizedClientManager(
 				clientRegistrationRepository, oAuth2AuthorizedClientService);
 		authorizedClientManager.setAuthorizedClientProvider(authorizedClientProvider);
@@ -106,7 +108,7 @@ public class AuthorizedWebClientConfig {
 
 	@Bean
 	OAuth2AccessTokenResponseClient<OAuth2ClientCredentialsGrantRequest> tokenResponseClient() {
-		return new DefaultClientCredentialsTokenResponseClient();
+		return new RestClientClientCredentialsTokenResponseClient();
 	}
 
 }

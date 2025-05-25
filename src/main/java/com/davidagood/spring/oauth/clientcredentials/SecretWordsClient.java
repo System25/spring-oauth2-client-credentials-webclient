@@ -48,7 +48,7 @@ public class SecretWordsClient {
 		catch (WebClientResponseException wcre) {
 			throw new SecretWordsRequestException(String.format(
 					"Secret words request failed; Request: method=%s, url=%s; Response: status=%s, body=%s; Error: %s",
-					get, url, wcre.getRawStatusCode(), wcre.getResponseBodyAsString(), wcre.getMessage()));
+					get, url, wcre.getStatusCode(), wcre.getResponseBodyAsString(), wcre.getMessage()));
 		}
 		catch (WebClientException wce) {
 			throw new SecretWordsRequestException(String.format(
