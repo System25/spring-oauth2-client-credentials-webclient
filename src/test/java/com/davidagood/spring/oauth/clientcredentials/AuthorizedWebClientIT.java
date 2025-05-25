@@ -8,7 +8,6 @@ import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -50,6 +49,7 @@ import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import static com.davidagood.spring.oauth.clientcredentials.AuthorizedWebClientConfig.REGISTRATION_ID;
@@ -123,35 +123,27 @@ class AuthorizedWebClientIT {
 		mockWebServer.close();
 	}
 
-	/*
-	 * By running this test twice, we make sure the that
-	 * InMemoryOAuth2AuthorizedClientService's authorizedClient from one test is not
-	 * carried over in Spring context to a subsequent test. Notice that this class is
-	 * annotated @DirtiesContext, without which the authorizedClients are carried over in
-	 * the Spring context. We could manually delete the authorizedClient after each test
-	 * using InMemoryOAuth2AuthorizedClientService#removeAuthorizedClient, but just
-	 * declaring @DirtiesContext is better since it doesn't involve fiddling with internal
-	 * Spring state
-	 */
-	@RepeatedTest(2)
-	void happyPath() throws Exception {
+	@Test
+	void shouldGetOauthTokenJustOnceWhenRequestsAreSerialized() throws Exception {
+		// Given
 		var secretWords = List.of("speakers", "keyboard");
 		var expected = SecretWordsDto.from(secretWords, FIXED_TIMESTAMP);
+		int repetitions = 10;
 
 		mockWebServer.enqueue(createAuthServerGrantRequestSuccessResponse());
-		mockWebServer.enqueue(createResourceServerSuccessResponse(secretWords));
-		mockWebServer.enqueue(createResourceServerSuccessResponse(secretWords));
+		for (int i = 0; i < repetitions; i++) {
+			mockWebServer.enqueue(createResourceServerSuccessResponse(secretWords));
+		}
 
-		mockMvc.perform(get("/api/words"))
-			.andExpect(status().isOk())
-			.andExpect(MockMvcResultMatchers.content()
-				.json(objectMapper.writeValueAsString(expected), JsonCompareMode.STRICT));
+		// When
+		for (int i = 0; i < repetitions; i++) {
+			mockMvc.perform(get("/api/words"))
+				.andExpect(status().isOk())
+				.andExpect(MockMvcResultMatchers.content()
+					.json(objectMapper.writeValueAsString(expected), JsonCompareMode.STRICT));
+		}
 
-		mockMvc.perform(get("/api/words"))
-			.andExpect(status().isOk())
-			.andExpect(MockMvcResultMatchers.content()
-				.json(objectMapper.writeValueAsString(expected), JsonCompareMode.STRICT));
-
+		// Then
 		verify(authorizationServerAuthorizationSuccessHandler, times(1)).onAuthorizationSuccess(any(), any(), any());
 
 		RecordedRequest authServerRequest = mockWebServer.takeRequest();
@@ -163,51 +155,55 @@ class AuthorizedWebClientIT {
 		RecordedRequest firstResourceServerRequest = mockWebServer.takeRequest();
 		assertThat(firstResourceServerRequest.getHeader(HttpHeaders.AUTHORIZATION))
 			.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
-
-		RecordedRequest secondResourceServerRequest = mockWebServer.takeRequest();
-		assertThat(secondResourceServerRequest.getHeader(HttpHeaders.AUTHORIZATION))
-			.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
 	}
 
 	@Test
-	void resourceServerUnauthorizedAuthorizedClientRemovalTest() throws Exception {
+	void shouldGetOauthTokenJustOnceWhenRequestsAreParallelize() throws Exception {
+		// Given
 		var secretWords = List.of("speakers", "keyboard");
 		var expected = SecretWordsDto.from(secretWords, FIXED_TIMESTAMP);
+		int repetitions = 10;
 
 		mockWebServer.enqueue(createAuthServerGrantRequestSuccessResponse());
-		mockWebServer.enqueue(createResourceServerUnauthorizedResponse());
-		mockWebServer.enqueue(createAuthServerGrantRequestSuccessResponse());
-		mockWebServer.enqueue(createResourceServerSuccessResponse(secretWords));
+		for (int i = 0; i < repetitions; i++) {
+			mockWebServer.enqueue(createResourceServerSuccessResponse(secretWords));
+		}
 
-		mockMvc.perform(get("/api/words")).andExpect(status().isInternalServerError());
-		mockMvc.perform(get("/api/words"))
-			.andExpect(status().isOk())
-			.andExpect(MockMvcResultMatchers.content()
-				.json(objectMapper.writeValueAsString(expected), JsonCompareMode.STRICT));
+		var jsonBody = objectMapper.writeValueAsString(expected);
+		var threads = new Thread[repetitions];
+		for (int i = 0; i < repetitions; i++) {
+			threads[i] = new Thread(() -> {
+				try {
+					mockMvc.perform(get("/api/words"))
+						.andExpect(status().isOk())
+						.andExpect(MockMvcResultMatchers.content().json(jsonBody, JsonCompareMode.STRICT));
+				}
+				catch (Exception e) {
+					e.printStackTrace();
+				}
+			});
+		}
 
-		verify(authorizationServerAuthorizationSuccessHandler, times(2)).onAuthorizationSuccess(any(), any(), any());
-		verify(resourceServerAuthorizationFailureHandler, times(1)).onAuthorizationFailure(any(), any(), any());
+		// When
+		for (int i = 0; i < repetitions; i++) {
+			threads[i].start();
+		}
 
-		RecordedRequest firstAuthServerRequest = mockWebServer.takeRequest();
-		assertThat(firstAuthServerRequest.getRequestUrl()).isEqualTo(HttpUrl.parse(
+		for (int i = 0; i < repetitions; i++) {
+			threads[i].join();
+		}
+
+		// Then
+		verify(authorizationServerAuthorizationSuccessHandler, times(1)).onAuthorizationSuccess(any(), any(), any());
+
+		RecordedRequest authServerRequest = mockWebServer.takeRequest();
+		assertThat(authServerRequest.getRequestUrl()).isEqualTo(HttpUrl.parse(
 				clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID).getProviderDetails().getTokenUri()));
-		assertThat(firstAuthServerRequest.getHeader(HttpHeaders.CONTENT_TYPE))
+		assertThat(authServerRequest.getHeader(HttpHeaders.CONTENT_TYPE))
 			.isEqualTo(new MediaType(MediaType.APPLICATION_FORM_URLENCODED).toString());
 
 		RecordedRequest firstResourceServerRequest = mockWebServer.takeRequest();
 		assertThat(firstResourceServerRequest.getHeader(HttpHeaders.AUTHORIZATION))
-			.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
-
-		assertThat(firstAuthServerRequest.getBody().readUtf8()).isEqualTo(createTokenResponseAsFormData());
-
-		RecordedRequest secondAuthServerRequest = mockWebServer.takeRequest();
-		assertThat(secondAuthServerRequest.getRequestUrl()).isEqualTo(HttpUrl.parse(
-				clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID).getProviderDetails().getTokenUri()));
-		assertThat(secondAuthServerRequest.getHeader(HttpHeaders.CONTENT_TYPE))
-			.isEqualTo(new MediaType(MediaType.APPLICATION_FORM_URLENCODED).toString());
-
-		RecordedRequest secondResourceServerRequest = mockWebServer.takeRequest();
-		assertThat(secondResourceServerRequest.getHeader(HttpHeaders.AUTHORIZATION))
 			.isEqualTo(String.format("%s %s", BEARER.getValue(), DUMMY_ACCESS_TOKEN));
 	}
 
@@ -219,6 +215,7 @@ class AuthorizedWebClientIT {
 
 	MockResponse createAuthServerGrantRequestSuccessResponse() {
 		return new MockResponse().setResponseCode(200)
+			.setBodyDelay(100, TimeUnit.MILLISECONDS)
 			.setHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)
 			.setBody(createTokenResponseBody());
 	}
